@@ -897,6 +897,7 @@ def page():
             try:                                   # 미국: 야후 5분봉
                 d, i_, src_ = load_us5(code.strip(), idx_sym, calc)
                 if len(d) < 60:
+                    nonlocal_err[1] = len(d)
                     raise ValueError(f"5분봉 {len(d)}개뿐")
                 return d, i_, src_
             except Exception as e5:
@@ -906,11 +907,12 @@ def page():
                 return load_daily(code.strip(), idx_sym, calc)   # 처음부터 5분봉이 안 되면 주식002처럼 일봉
         return load_both(code.strip(), idx_sym, calc)
 
-    nonlocal_err = [""]
+    nonlocal_err = ["", 0]                            # [미국 5분봉 실패 이유, 받은 5분봉 개수]
     try:
         df, _idf, data_src = _fetch()
         if df is None or df.empty or len(df) < 60:
-            raise ValueError(f"데이터 부족(받은 개수 {0 if df is None else len(df)}개)")
+            _n = 0 if df is None else len(df)
+            raise ValueError(f"데이터 부족(받은 개수 {max(_n, nonlocal_err[1])}개)")
         if (_idf is None or _idf.empty) and last_ok is not None and last_ok[1] is not None:
             _idf = last_ok[1]                      # 지수만 실패하면 직전 지수 사용 (지수선이 사라졌다 생기지 않게)
         st.session_state[LAST_KEY] = (code, (df, _idf, data_src))   # 다른 종목으로 바꾸면 이전 종목 것은 덮어써서 사라짐
@@ -920,7 +922,21 @@ def page():
             stale_note = f"⚠ {pd.Timestamp.now(tz='Asia/Seoul'):%H:%M:%S} 시세 받기 실패 → 직전 시세로 표시 중 (다음 갱신 때 다시 시도)"
         else:
             status.empty()
-            st.error(f"데이터를 불러오지 못했습니다: {e}  (6자리 종목코드나 미국 티커를 확인하세요)")
+            _m = str(e)
+            _cnt = re.search(r"받은 개수 (\d+)개|5분봉 (\d+)개", _m)
+            _cnt = max(int(next(g for g in _cnt.groups() if g)) if _cnt else -1, nonlocal_err[1] or -1)
+            if _cnt <= 0 and (isinstance(e, KeyError) or _cnt == 0
+                              or any(k in _m for k in ("timestamp", "No data", "delisted", "not found", "404"))):
+                # 시세가 하나도 없을 때 나는 오류 → 알아보기 쉬운 말로 안내 (주식002와 같은 문구)
+                st.warning(f"'{code}' 시세를 찾지 못했습니다. 티커가 틀렸거나, 상장폐지·거래중지된 종목일 수 있어요."
+                           + (" 미국 종목은 티커(예: AAPL)나 한글 이름(예: 애플)으로 다시 검색해 보세요." if US
+                              else " 국내 종목은 6자리 종목코드(예: 005930)나 종목명으로 다시 검색해 보세요."))
+            elif _cnt > 0:
+                # 상장 직후 등: 봉이 60개가 안 됨
+                st.info(f"'{code}'는 아직 시세가 {_cnt}개뿐이라 매도선·매수선·곡선추세를 계산할 수 없어요(60개 이상 필요). "
+                        f"상장한 지 얼마 안 된 종목이면 장중에 {BAR_MIN}분봉이 쌓인 뒤(약 5시간) 다시 열어 보세요.")
+            else:
+                st.error(f"데이터를 불러오지 못했습니다: {e}")
             st.stop()
     us_err = nonlocal_err[0]
     INTRA = not (US and data_src.endswith("일봉"))    # True = 5분봉, False = 일봉(미국 5분봉 실패 시)
