@@ -73,6 +73,7 @@ US_KO = {
     "CRM": ("세일즈포스", "NYSE"), "IBM": ("아이비엠", "NYSE"), "UBER": ("우버", "NYSE"),
     "BABA": ("알리바바", "NYSE"), "SPY": ("S&P500 ETF", "NYSE"), "VOO": ("뱅가드 S&P500 ETF", "NYSE"),
     "SCHD": ("슈왑 배당 ETF", "NYSE"),
+    "ANT": ("앤트로픽 클로드", "NASDAQ"),          # 2026-11-19 나스닥 상장 (거래소 목록에 아직 없을 수 있어 직접 추가)
 }
 US_MKTS = ("NASDAQ", "NYSE", "AMEX", "US")
 
@@ -102,7 +103,7 @@ def to_ko(name: str) -> str:
     return re.sub(r"[A-Za-z]+", rep, t)
 
 
-LIST_VER = 2   # 종목 목록 구성을 바꾸면 이 숫자를 올림 → 하루 동안 저장된 옛 목록 대신 새로 받음
+LIST_VER = 4   # 종목 목록 구성을 바꾸면 이 숫자를 올림 → 하루 동안 저장된 옛 목록 대신 새로 받음
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -834,6 +835,10 @@ def page():
                 st.caption("종목 목록을 불러오지 못했습니다. 6자리 종목코드나 미국 티커(예: AAPL)로 검색해 주세요.")
         else:
             kind, m = search(lst, q)
+            # 목록에 없는 티커(새로 상장한 종목 등)를 입력했는데 이름 일부만 겹치는 종목 하나로 넘어가지 않게 → 목록으로 보여줌
+            if (kind == "exact" and re.fullmatch(r"[A-Z]{1,5}(-[A-Z])?", qu) and qu not in set(lst["Code"])
+                    and not ((m["nn"] == norm(q)) | (m["nk"] == norm(q))).any()):
+                kind = "list"
             if kind == "none" and re.fullmatch(r"[A-Z]{1,5}(-[A-Z])?", qu):
                 st.session_state.code = qu                              # 목록에 없는 미국 티커도 바로 시도
             elif kind == "exact":                                       # 이름·코드가 정확히 맞으면 바로 표시
@@ -841,6 +846,9 @@ def page():
             elif kind == "list":                                        # 일부만 입력 → 연관 종목에서 선택
                 opts = [f"{r.disp}{' · ' + MKT_KO[r.mkt] if r.mkt in MKT_KO else ''} ({r.Code})"
                         for r in m.head(30).itertuples()]
+                # 영문 1~5글자를 입력했는데 그 티커가 목록에 없으면(새로 상장한 종목 등) 맨 위에 '티커로 바로 보기' 추가
+                if re.fullmatch(r"[A-Z]{1,5}(-[A-Z])?", qu) and qu not in set(lst["Code"]):
+                    opts.insert(0, f"{qu} — 미국 티커로 바로 보기 ({qu})")
                 sel = st.selectbox("연관 종목", opts, index=None, key=f"sel_{norm(q)}",
                                    placeholder=f"연관 종목 {len(m)}개 — 여기서 선택", label_visibility="collapsed")
                 if sel:
