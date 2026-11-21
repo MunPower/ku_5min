@@ -27,6 +27,7 @@ header,[data-testid="stHeader"],[data-testid="stToolbar"],[data-testid="stDecora
 disp, calc, lam, kmul, band_pct = 120, 720, 8e3, 1.6, 0.0
 BAR_MIN = 5               # 분봉 단위(분)
 FETCH_DAYS = 16           # 분봉을 받아올 달력 기간(일) — 720봉(약 9거래일)을 채우기 위해 여유 있게
+CACHE_MAX = 30            # 서버 메모리에 보관할 종목 시세 최대 개수 (넘으면 오래된 것부터 지움)
 REGULAR_ONLY = True       # True = 정규장(09:00~15:30)만 사용 (NXT 시간외 거래 제외)
 DEFAULT_CODE = "278530"   # 처음 열 때 보여줄 종목: KODEX 200TR
 
@@ -319,7 +320,7 @@ def to_bars(m1: pd.DataFrame, minutes: int) -> pd.DataFrame:
     return b.dropna(subset=["Close"])
 
 
-@st.cache_data(ttl=50, show_spinner=False)   # 1분 자동 갱신 때 항상 새 시세를 받도록 50초
+@st.cache_data(ttl=50, max_entries=CACHE_MAX, show_spinner=False)   # 1분 자동 갱신 때 항상 새 시세를 받도록 50초
 def load_both(code: str, idx_sym: str, bars: int):
     """종목과 지수의 5분봉을 동시에 받아 온다. 지수는 실패하면 None(차트는 지수선 없이 표시)"""
     with ThreadPoolExecutor(max_workers=2) as ex:
@@ -351,7 +352,7 @@ def _yf_5m(sym: str) -> pd.DataFrame:
     return d[d["Close"] > 0].sort_index()
 
 
-@st.cache_data(ttl=50, show_spinner=False)
+@st.cache_data(ttl=50, max_entries=CACHE_MAX, show_spinner=False)
 def load_us5(code: str, idx_sym: str, bars: int):
     """미국 종목·지수 5분봉을 동시에 받는다. 지수는 실패하면 None.
     5분봉 마지막 값(15:55봉)은 공식 종가와 조금 다를 수 있어서, 일봉의 공식 종가·전일 종가로 맞춘다"""
@@ -403,7 +404,7 @@ def _fix_close(d5: pd.DataFrame, d1) -> pd.DataFrame:
     return d5
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, max_entries=CACHE_MAX, show_spinner=False)
 def load_daily(code: str, idx_sym: str, days: int):
     """미국 종목: 일봉 종목·지수 시세를 동시에 받아 온다 (주식002와 같음)"""
     start = (pd.Timestamp.today() - pd.Timedelta(days=int(days * 1.6) + 10)).strftime("%Y-%m-%d")
@@ -879,8 +880,9 @@ def page():
         idx_sym, idx_name = ("KOSDAQ", "코스닥") if mkt == "KOSDAQ" else ("KOSPI", "코스피")
     # 시세 받기 — 한 번 실패해도 차트를 지우지 않고 바로 전 시세로 계속 보여줌 (차트가 지워졌다 다시 생기면 화면이 하얘짐)
     us_err, stale_note = "", ""
-    LAST_KEY = f"last_ok_{code}"
-    last_ok = st.session_state.get(LAST_KEY)          # (df, 지수, 출처) — 이 종목에서 마지막으로 성공한 시세
+    LAST_KEY = "last_ok"                              # 직전 시세는 지금 보는 종목 하나만 보관 (메모리 절약)
+    _lk = st.session_state.get(LAST_KEY)
+    last_ok = _lk[1] if _lk and _lk[0] == code else None   # (df, 지수, 출처) — 이 종목에서 마지막으로 성공한 시세
 
     def _fetch():
         if US:
@@ -903,7 +905,7 @@ def page():
             raise ValueError(f"데이터 부족(받은 개수 {0 if df is None else len(df)}개)")
         if (_idf is None or _idf.empty) and last_ok is not None and last_ok[1] is not None:
             _idf = last_ok[1]                      # 지수만 실패하면 직전 지수 사용 (지수선이 사라졌다 생기지 않게)
-        st.session_state[LAST_KEY] = (df, _idf, data_src)
+        st.session_state[LAST_KEY] = (code, (df, _idf, data_src))   # 다른 종목으로 바꾸면 이전 종목 것은 덮어써서 사라짐
     except Exception as e:
         if last_ok is not None:
             df, _idf, data_src = last_ok
